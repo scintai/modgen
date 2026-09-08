@@ -1,7 +1,7 @@
 {
   "private": true,
-  "name": "scintai-dev",
-  "version": "0.0.1.144",
+  "name": "scintai",
+  "version": "2.1.142",
   "license": "BSD-3-Clause",
   "type": "module",
   "scripts": {
