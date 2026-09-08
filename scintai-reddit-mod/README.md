@@ -1,12 +1,12 @@
 # 🎨 ScintAI - AI Image Generation for Reddit
 
-Turn your text prompts in post into stunning AI generated Art, right from a Reddit post. **ScintAI** is a Devvit app that brings the power of Google's Gemini and Imagen models directly to your subreddit.
+Turn your text prompts in post into stunning AI generated Art, right from a Reddit post. **ScintAI** is a Devvit app that brings custom GPU image generation directly to your subreddit.
 
 ---
 
 ## What ScintAI does
 
-- **Generates AI images from text prompts** using Google's cutting-edge models (Gemini, Imagen 4, Imagen 4 Ultra, Imagen 4 Fast).
+- **Generates AI images from text prompts** via the middleman queue (Cloudflare Worker → Modal GPU).
 - **Content moderation** with OpenAI's moderation API to ensure NSFW and harmful prompts are blocked.
 - **Rate limiting** to control how many images a user can generate per day.
 - **Customizable post-generation messages** with optional links.
@@ -67,8 +67,8 @@ Moderators can configure ScintAI through the Dev Platform settings.
 | Setting                      | Description                                                                          |
 | :--------------------------- | :----------------------------------------------------------------------------------- |
 | **OpenAI API Key**           | Required. Used for content moderation via `api.openai.com`.                          |
-| **Gemini API Key**           | Required. Used for image generation via `generativelanguage.googleapis.com`.         |
-| **Image Model**              | Select the AI model: `Nano Banana Pro`, `Imagen 4`, `Imagen 4 Ultra`, `Imagen 4 Fast`. |
+| **Middleman API URL**          | Required. Base URL of the middleman worker, e.g. `https://modgen.scintai.com`.       |
+| **Middleman API Key**          | Required. Must match the `MIDDLEMAN_KEY` secret on the middleman worker.             |
 | **Rate Limit Per User**      | The maximum number of image generations allowed per user, per day.                   |
 | **After Generation Message** | A custom message displayed below the generated image.                                |
 | **Link After Generation**    | A URL to link the above message to.                                                  |
@@ -81,8 +81,15 @@ ScintAI uses the following external APIs:
 
 | API                               | Domain                                 | Purpose                           |
 | :-------------------------------- | :------------------------------------- | :-------------------------------- |
-| **Google Generative Language API**| `generativelanguage.googleapis.com`    | AI Image Generation (Gemini/Imagen) |
+| **Middleman API**                 | `modgen.scintai.com`                   | Async image generation queue (Cloudflare Worker → Modal GPU) |
 | **OpenAI API**                    | `api.openai.com`                       | Content Moderation                |
+
+## Fetch Domains
+
+The following domains are requested for this app:
+
+- `api.openai.com` - Used for content moderation via the OpenAI moderation API
+- `modgen.scintai.com` - First-party image generation queue; the bot enqueues `{prompt, aspectRatio, uid}` and polls for the finished image (Devvit HTTP calls time out after 30s, so generation is async via scheduler jobs)
 
 ---
 
@@ -93,7 +100,7 @@ ScintAI uses the following external APIs:
 3.  **Prompt Extraction**: The `prompt@start ... prompt@end` block is extracted from the post body.
 4.  **Moderation**: The prompt is sent to OpenAI's moderation API. If flagged, the post is removed.
 5.  **Rate Limiting**: The app checks the user's daily usage against the configured limit using Redis.
-6.  **Image Generation**: A background job is scheduled. It calls the selected Google model (Gemini or Imagen) to generate the image.
+6.  **Image Generation**: An enqueue job sends `{prompt, aspectRatio, uid=postId}` to the middleman API and returns instantly. A poll job then checks the job status every minute until the GPU worker finishes.
 7.  **Posting**: The generated image is uploaded to Reddit and posted as a distinguished comment on the original post. The user is notified via private message.
 
 ---

@@ -25,6 +25,7 @@ app.use("/api/*", cors());
 app.use("/api/*", async (c, next) => {
   const key = c.env.MIDDLEMAN_KEY;
   if (key && c.req.header("X-Api-Key") !== key) {
+    console.warn("[middleman] unauthorized", c.req.path);
     return c.json({ error: "Unauthorized" }, 401);
   }
   await next();
@@ -71,10 +72,12 @@ app.post("/api/offload/scintai", async (c) => {
     return c.json({ error: (err as Error).message }, 400);
   }
   const { prompt, aspectRatio, mappedRatio, uid } = parsed;
+  console.log("[middleman] enqueue received", JSON.stringify({ uid, aspectRatio, mappedRatio }));
 
   // Idempotency: same uid (postId) never queues twice.
   const existing = await kvGet(c.env.KV, uid).catch(() => null);
   if (existing) {
+    console.log("[middleman] enqueue deduped", JSON.stringify({ uid, modalId: existing.modalId, status: existing.status }));
     return c.json(
       {
         uid: existing.uid,
@@ -117,13 +120,14 @@ app.post("/api/offload/scintai", async (c) => {
       updatedAt: new Date().toISOString(),
     };
     await kvPut(c.env.KV, failed);
-    console.error("[middleman] enqueue failed:", err);
+    console.error("[middleman] enqueue failed", JSON.stringify({ uid, modalId, error: (err as Error).message }));
     return c.json(
       { uid, modalId, status: "error", error: (err as Error).message },
       502,
     );
   }
 
+  console.log("[middleman] enqueue accepted", JSON.stringify({ uid, modalId }));
   return c.json({ uid, modalId, status: "queued", mappedRatio }, 202);
 });
 
@@ -170,17 +174,24 @@ app.post("/api/offload/scintai/results", async (c) => {
         toFetch.map((r) => r.modalId),
       );
       const clearIds: number[] = [];
+      let terminal = 0;
       for (const rec of toFetch) {
         const updated = applyModalResult(rec, modal[String(rec.modalId)]);
         await kvPut(c.env.KV, updated);
         results[updated.uid] = toPollResponse(updated);
-        if (isTerminal(updated.status)) clearIds.push(updated.modalId);
+        if (isTerminal(updated.status)) {
+          clearIds.push(updated.modalId);
+          terminal++;
+        } else if (updated.status !== rec.status) {
+          console.log("[middleman] batch transition", JSON.stringify({ uid: updated.uid, from: rec.status, to: updated.status }));
+        }
       }
+      console.log("[middleman] batch poll", JSON.stringify({ fetched: toFetch.length, terminal }));
       if (clearIds.length > 0) {
         c.executionCtx.waitUntil(postModalClear(baseUrl, c.env.HF_TOKEN, clearIds));
       }
     } catch (err) {
-      console.error("[middleman] batch poll modal fetch failed:", err);
+      console.error("[middleman] batch poll modal fetch failed", JSON.stringify({ count: toFetch.length, error: (err as Error).message }));
       for (const rec of toFetch) results[rec.uid] = toPollResponse(rec); // stale
     }
   }
@@ -208,6 +219,9 @@ app.get("/api/offload/scintai/:uid", async (c) => {
     ]);
     const updated = applyModalResult(record, modal[String(record.modalId)]);
     await kvPut(c.env.KV, updated);
+    if (updated.status !== record.status) {
+      console.log("[middleman] poll transition", JSON.stringify({ uid, from: record.status, to: updated.status }));
+    }
     if (isTerminal(updated.status)) {
       // Free the Modal Dict entry (same contract as Next.js lite-sync clear).
       c.executionCtx.waitUntil(
@@ -216,7 +230,7 @@ app.get("/api/offload/scintai/:uid", async (c) => {
     }
     return c.json(toPollResponse(updated));
   } catch (err) {
-    console.error("[middleman] poll modal fetch failed, returning stale:", err);
+    console.error("[middleman] poll modal fetch failed", JSON.stringify({ uid, error: (err as Error).message }));
     return c.json(toPollResponse(record)); // stale but retryable
   }
 });

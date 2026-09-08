@@ -5,6 +5,9 @@
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev:worker": "pnpm --dir worker dev",
+    "login:worker": "pnpm --dir worker run login",
+    "login:reddit": "pnpm --dir scintai-reddit-mod run login",
+    "login": "pnpm login:worker && pnpm login:reddit",
     "deploy:worker": "pnpm --dir worker deploy",
     "typecheck:worker": "pnpm --dir worker typecheck",
     "cf-typegen": "pnpm --dir worker cf-typegen",

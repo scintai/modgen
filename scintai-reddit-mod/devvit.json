@@ -1,7 +1,12 @@
 {
-  "name": "scintai",
+  "name": "scintai-dev",
   "blocks": {
     "entry": "src/main.ts",
-    "triggers": ["onPostCreate"]
+    "triggers": [
+      "onPostCreate"
+    ]
+  },
+  "dev": {
+    "subreddit": "scintai_dev_dev"
   }
 }

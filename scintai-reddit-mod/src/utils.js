@@ -61,16 +61,12 @@ export const checkModeration = async (prompt, apiKey) => {
             model: "omni-moderation-latest",
             input: moderationInput,
         });
+        // Only minor-sexual content is blocked. Everything else (adult
+        // consensual content, hate, harassment, self-harm, etc.) passes —
+        // this bot serves an adult platform, the underage firewall is the
+        // single hard rule.
         const BLOCKED_CATEGORIES = [
-            "sexual",
             "sexual/minors",
-            "hate",
-            "hate/threatening",
-            "harassment",
-            "harassment/threatening",
-            "self-harm",
-            "self-harm/intent",
-            "self-harm/instructions",
         ];
         if (moderation.results[0].flagged) {
             const categories = moderation.results[0].categories;
@@ -90,121 +86,44 @@ export const checkModeration = async (prompt, apiKey) => {
         return { flagged: true, categories: ["Moderation Check Failed"] };
     }
 };
-export async function generateImage(prompt, apiKey, modelId = "gemini-3-pro-image-preview", aspectRatio = "1:1") {
-    // Check if it's a Gemini model (nano banana) or Imagen model
-    const isGeminiModel = modelId === "gemini-3-pro-image-preview";
-    if (isGeminiModel) {
-        return generateImageWithGemini(prompt, apiKey, modelId, aspectRatio);
-    }
-    else {
-        return generateImageWithImagen(prompt, apiKey, modelId, aspectRatio);
-    }
+function stripTrailingSlash(url) {
+    return url.trim().replace(/\/$/, "");
 }
-/**
- * Generate image using Gemini (Nano Banana Pro) model
- */
-async function generateImageWithGemini(prompt, apiKey, modelId, aspectRatio) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}`;
-    try {
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                contents: [{
-                        role: "user",
-                        parts: [
-                            { text: prompt }
-                        ]
-                    }],
-                generationConfig: {
-                    responseModalities: ["IMAGE", "TEXT"],
-                    imageConfig: {
-                        image_size: "1K",
-                        aspect_ratio: aspectRatio
-                    }
-                },
-                tools: [{
-                        googleSearch: {}
-                    }]
-            })
-        });
-        if (!response.ok) {
-            console.error(`Gemini API Error: ${response.status} ${response.statusText}`);
-            const text = await response.text();
-            console.error("Error details:", text);
-            return undefined;
-        }
-        const data = await response.json();
-        const chunks = Array.isArray(data) ? data : [data];
-        for (const chunk of chunks) {
-            if (chunk.candidates) {
-                for (const candidate of chunk.candidates) {
-                    if (candidate.content && candidate.content.parts) {
-                        for (const part of candidate.content.parts) {
-                            if (part.inlineData && part.inlineData.data) {
-                                console.log("Gemini: Image received as base64 data");
-                                return {
-                                    data: part.inlineData.data,
-                                    mimeType: part.inlineData.mimeType || "image/png"
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-        }
+// Fire-and-forget enqueue: returns instantly with the job id (uid).
+// The caller must poll getOffloadStatus() — never await generation here:
+// Devvit HTTP calls time out after 30s, GPU generation takes minutes.
+export async function enqueueOffload(baseUrl, apiKey, prompt, aspectRatio, uid) {
+    const url = `${stripTrailingSlash(baseUrl)}/api/offload/scintai`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-Api-Key": apiKey,
+        },
+        body: JSON.stringify({ prompt, aspectRatio, uid }),
+    });
+    if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Enqueue failed (${response.status}): ${text.slice(0, 200)}`);
     }
-    catch (error) {
-        console.error("Gemini API Request Failed:", error);
-    }
-    return undefined;
+    return await response.json();
 }
-/**
- * Generate image using Imagen 4 models (Imagen 4, Imagen 4 Ultra, Imagen 4 Fast)
- */
-async function generateImageWithImagen(prompt, apiKey, modelId, aspectRatio) {
-    // Ensure model ID has proper format for the API
-    const formattedModelId = `models/${modelId}`;
-    const url = `https://generativelanguage.googleapis.com/v1beta/${formattedModelId}:predict?key=${apiKey}`;
-    try {
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                instances: [{ prompt }],
-                parameters: {
-                    outputMimeType: "image/jpeg",
-                    sampleCount: 1,
-                    personGeneration: "ALLOW_ALL",
-                    aspectRatio: aspectRatio,
-                    imageSize: "2K"
-                }
-            })
-        });
-        if (!response.ok) {
-            console.error(`Imagen API Error: ${response.status} ${response.statusText}`);
-            const text = await response.text();
-            console.error("Error details:", text);
-            return undefined;
-        }
-        const data = await response.json();
-        // Extract the base64 encoded image from predictions
-        const images = (data.predictions || [])
-            .map(p => p.bytesBase64Encoded)
-            .filter(Boolean);
-        if (images.length > 0 && images[0]) {
-            return {
-                data: images[0],
-                mimeType: "image/jpeg"
-            };
-        }
-        return undefined;
+// Lazy poll: middleman returns the cached terminal result, otherwise
+// live-proxies the GPU worker. queued/started/pending = not ready yet.
+export async function getOffloadStatus(baseUrl, apiKey, uid) {
+    const url = `${stripTrailingSlash(baseUrl)}/api/offload/scintai/${encodeURIComponent(uid)}`;
+    const response = await fetch(url, {
+        method: "GET",
+        headers: {
+            "X-Api-Key": apiKey,
+        },
+    });
+    if (response.status === 404) {
+        throw new Error("Offload not found (unknown uid)");
     }
-    catch (error) {
-        return undefined;
+    if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Poll failed (${response.status}): ${text.slice(0, 200)}`);
     }
+    return await response.json();
 }

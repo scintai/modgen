@@ -8,7 +8,7 @@
   ],
   "vars": {
     // Base URL of deployed lite.py fastapi_app, e.g. "https://xxx.modal.run"
-    "MODAL_LITE_URL": "https://your-modal-app.modal.run"
+    "MODAL_LITE_URL": "https://thisisadityapushkar--scint-lite-a10-2-fastapi-app.modal.run"
     // Secrets (never put in vars): wrangler secret put HF_TOKEN
     // Optional inbound auth: wrangler secret put MIDDLEMAN_KEY
   },
@@ -21,6 +21,19 @@
       "preview_id": "c82fd89045cbc409e9717dbe9b50d5fe8"
     }
   ],
+   "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
+  }
   // "r2_buckets": [
   //   {
   //     "binding": "MY_BUCKET",

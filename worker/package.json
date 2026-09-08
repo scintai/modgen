@@ -3,8 +3,10 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "login": "wrangler login",
     "deploy": "wrangler deploy --minify",
     "typecheck": "tsc --noEmit",
+    "test:live": "node scripts/live-test.mjs",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {

@@ -1,15 +1,15 @@
 import { Devvit, type Context, RichTextBuilder } from "@devvit/public-api";
 
-import { checkModeration, extractAspectRatio, extractPrompt, generateImage, removePostWithReason, sendMessage } from "./utils.js";
+import { checkModeration, extractAspectRatio, extractPrompt, enqueueOffload, getOffloadStatus, removePostWithReason } from "./utils.js";
 import { TRIGGER_WORD_FOR_GENERATION } from "./contants.js";
-import { type ImageModelId, type AspectRatio } from "./type.js";
+import { type AspectRatio } from "./type.js";
 
 
 Devvit.configure({
   redditAPI: true,
   http: {
     enabled: true,
-    domains: ['api.openai.com', 'generativelanguage.googleapis.com'],
+    domains: ['api.openai.com', 'modgen.scintai.com'],
   },
   media: true,
   redis: true
@@ -25,35 +25,18 @@ Devvit.addSettings([
     helpText: 'Your OpenAI API key will be used for content moderation.'
   },
   {
-    name: 'GEMINI_API_KEY',
-    label: 'Gemini API Key',
+    name: 'MIDDLEMAN_URL',
+    label: 'Middleman API URL',
     type: 'string',
     scope: 'installation',
-    helpText: "Your Gemini API key will be used for image generation."
+    helpText: 'Base URL of the middleman worker, e.g. https://modgen.scintai.com'
   },
   {
-    name: "SELECT_MODEL",
-    label: "Image Model",
-    type: "select",
-    options: [
-      {
-        label: "Nano Banana Pro",
-        value: "gemini-3-pro-image-preview"
-      },
-      {
-        label: "Imagen 4",
-        value: "imagen-4.0-generate-001"
-      },
-      {
-        label: "Imagen 4 Ultra",
-        value: "imagen-4.0-ultra-generate-001"
-      },
-      {
-        label: "Imagen 4 Fast",
-        value: "imagen-4.0-fast-generate-001"
-      },
-    ],
-    helpText: "The selected AI model is used for image generation.",
+    name: 'MIDDLEMAN_KEY',
+    label: 'Middleman API Key',
+    type: 'string',
+    scope: 'installation',
+    helpText: 'Must match the MIDDLEMAN_KEY secret on the middleman worker.'
   },
   {
     name: "RATE_LIMIT",
@@ -78,50 +61,156 @@ Devvit.addSettings([
   }
 ]);
 
-// Define the background worker
+// Poll every minute; GPU generation takes minutes and Devvit HTTP calls
+// time out after 30s, so no single job ever waits for the image.
+const POLL_DELAY_MS = 60 * 1000;
+const POLL_MAX_ATTEMPTS = 20;
+const ENQUEUE_RETRY_DELAY_MS = 30 * 1000;
+const ENQUEUE_MAX_ATTEMPTS = 3;
+
+// Job 1: fire-and-forget enqueue, then hand off to the poll loop.
+// uid = postId, so retries are idempotent (middleman dedupes by uid).
 Devvit.addSchedulerJob({
-  name: 'GENERATE_IMAGE_JOB',
+  name: 'ENQUEUE_IMAGE_JOB',
   onRun: async (event, context) => {
     const postId = event.data!.postId as string;
     const prompt = event.data!.prompt as string;
     const userId = event.data!.userId as string;
     const username = event.data!.username as string;
     const aspectRatio = event.data!.aspectRatio as AspectRatio;
+    const attempt = (event.data!.attempt as number | undefined) ?? 0;
 
+    const MIDDLEMAN_URL = await context.settings.get('MIDDLEMAN_URL') as string | undefined;
+    const MIDDLEMAN_KEY = await context.settings.get('MIDDLEMAN_KEY') as string | undefined;
 
-    const GEMINI_API_KEY = await context.settings.get('GEMINI_API_KEY');
-    const SELECT_MODEL = await context.settings.get('SELECT_MODEL') as string[] | undefined;
-    const MODEL_ID: ImageModelId = SELECT_MODEL?.[0] as ImageModelId || "imagen-4.0-fast-generate-001";
+    if (!MIDDLEMAN_URL || !MIDDLEMAN_KEY) {
+      await removePostWithReason(postId, "Image generation is not configured.", context as Context)
+      return;
+    }
+
+    try {
+      await enqueueOffload(MIDDLEMAN_URL, MIDDLEMAN_KEY, prompt, aspectRatio, postId);
+
+      await context.scheduler.runJob({
+        name: "POLL_IMAGE_JOB",
+        data: {
+          postId: postId,
+          userId: userId,
+          username: username,
+          attempt: 0,
+        },
+        runAt: new Date(Date.now() + POLL_DELAY_MS)
+      })
+    }
+    catch (error) {
+      console.error("Enqueue failed -", error);
+      if (attempt + 1 < ENQUEUE_MAX_ATTEMPTS) {
+        await context.scheduler.runJob({
+          name: "ENQUEUE_IMAGE_JOB",
+          data: {
+            postId: postId,
+            userId: userId,
+            username: username,
+            prompt: prompt,
+            aspectRatio: aspectRatio,
+            attempt: attempt + 1,
+          },
+          runAt: new Date(Date.now() + ENQUEUE_RETRY_DELAY_MS)
+        })
+        return;
+      }
+      const removalText = `\n\n*(Image Generation Failed - could not reach the image service)*`;
+      await removePostWithReason(postId, removalText, context as Context)
+    }
+  },
+});
+
+// Job 2: poll middleman until terminal, then publish. Reschedules itself
+// while the job is queued/started/pending on the GPU worker.
+Devvit.addSchedulerJob({
+  name: 'POLL_IMAGE_JOB',
+  onRun: async (event, context) => {
+    const postId = event.data!.postId as string;
+    const userId = event.data!.userId as string;
+    const username = event.data!.username as string;
+    const attempt = (event.data!.attempt as number | undefined) ?? 0;
+
+    const MIDDLEMAN_URL = await context.settings.get('MIDDLEMAN_URL') as string | undefined;
+    const MIDDLEMAN_KEY = await context.settings.get('MIDDLEMAN_KEY') as string | undefined;
     const AFTER_GENERATION_MESSAGE = await context.settings.get("AFTER_GENERATION_MESSAGE") || "View More AI Arts"
     const LINK_AFTER_GENERATION_MESSAGE = await context.settings.get("LINK_AFTER_GENERATION_MESSAGE") || "https://www.reddit.com/r/scintai/"
 
     const date = new Date().toISOString().split('T')[0];
     const redisKey = `daily_credits:${userId}:${date}`;
 
-    if (!GEMINI_API_KEY) {
+    if (!MIDDLEMAN_URL || !MIDDLEMAN_KEY) {
+      await removePostWithReason(postId, "Image generation is not configured.", context as Context)
+      return;
+    }
+
+    const scheduleNextPoll = async () => {
+      await context.scheduler.runJob({
+        name: "POLL_IMAGE_JOB",
+        data: {
+          postId: postId,
+          userId: userId,
+          username: username,
+          attempt: attempt + 1,
+        },
+        runAt: new Date(Date.now() + POLL_DELAY_MS)
+      })
+    };
+
+    let result;
+    try {
+      result = await getOffloadStatus(MIDDLEMAN_URL, MIDDLEMAN_KEY, postId);
+    }
+    catch (error) {
+      console.error("Poll failed -", error);
+      if (attempt + 1 < POLL_MAX_ATTEMPTS) {
+        await scheduleNextPoll();
+        return;
+      }
+      const removalText = `\n\n*(Image Generation Failed - timed out waiting for the image)*`;
+      await removePostWithReason(postId, removalText, context as Context)
+      return;
+    }
+
+    if (result.status === "error") {
+      const removalText = `\n\n*(Image Generation Failed - please try again)*`;
+      await removePostWithReason(postId, removalText, context as Context)
+      return;
+    }
+
+    if (result.status !== "success" || !result.image_b64) {
+      // queued / started / pending — GPU still working.
+      if (attempt + 1 < POLL_MAX_ATTEMPTS) {
+        await scheduleNextPoll();
+        return;
+      }
+      const removalText = `\n\n*(Image Generation Failed - timed out waiting for the image)*`;
+      await removePostWithReason(postId, removalText, context as Context)
       return;
     }
 
     try {
-      // 1. Call Image Generation API with selected model and aspect ratio
-      const imageResult = await generateImage(prompt, GEMINI_API_KEY as string, MODEL_ID, aspectRatio);
+      // Publish: same path as before, base64 now comes from middleman.
+      const mimeType = result.image_format === "png" ? "image/png" : "image/webp";
+      const imageUrl = `data:${mimeType};base64,${result.image_b64}`;
 
-      if (imageResult) {
-        const imageUrl = `data:${imageResult.mimeType};base64,${imageResult.data}`;
-
-        try {
-          const mediaUpload = await context.media.upload({
-            url: imageUrl,
-            type: 'image',
-          });
-          const rich = new RichTextBuilder()
-            .image({ mediaId: mediaUpload.mediaId })
-            .paragraph((p) => {
-              p.link({
-                text: AFTER_GENERATION_MESSAGE! as string,
-                url: LINK_AFTER_GENERATION_MESSAGE! as string
-              });
-            })
+      try {
+        const mediaUpload = await context.media.upload({
+          url: imageUrl,
+          type: 'image',
+        });
+        const rich = new RichTextBuilder()
+          .image({ mediaId: mediaUpload.mediaId })
+          .paragraph((p) => {
+            p.link({
+              text: AFTER_GENERATION_MESSAGE! as string,
+              url: LINK_AFTER_GENERATION_MESSAGE! as string
+            });
+          })
 
           const comment = await context.reddit.submitComment({
             id: postId,
@@ -129,22 +218,14 @@ Devvit.addSchedulerJob({
           });
           await comment.distinguish(true)
 
-          const messageContent = `https://www.reddit.com${comment.permalink}`
-          const messageContentSubject = 'ScintAI - Image Generated Successfully'
-          await sendMessage(username, messageContentSubject, messageContent, context as Context)
-
           const userHistoryKey = `user_history:${userId}`;
-          await context.redis.zAdd(userHistoryKey, { member: mediaUpload.mediaUrl, score: Date.now() });
-          await context.redis.incrBy(redisKey, 1);
-          return;
+        await context.redis.zAdd(userHistoryKey, { member: mediaUpload.mediaUrl, score: Date.now() });
+        await context.redis.incrBy(redisKey, 1);
+        return;
 
-        } catch (uploadError) {
-          console.error("Media upload failed -", uploadError);
-          throw new Error("Generation failed - Image generated but uploading failed.")
-        }
-
-      } else {
-        throw new Error("Generation failed - server error")
+      } catch (uploadError) {
+        console.error("Media upload failed -", uploadError);
+        throw new Error("Generation failed - Image generated but uploading failed.")
       }
     }
     catch (error) {
@@ -180,11 +261,8 @@ Devvit.addTrigger({
       return
     }
 
-    if (isNSFW) {
-      const removalNSFWMessage = "NSFW image generation is not allowed but If you are trying to generate SFW image with an NSFW tag on, please remove the tag and try again"
-      await removePostWithReason(postId!, removalNSFWMessage, context as Context)
-      return;
-    }
+    // NSFW-tagged posts are allowed through — only minor-related
+    // prompts are blocked (see moderation below).
 
     if(!postFlairUsed){
       const noFlairRejectionMessage = "Post flair is required for all the post."
@@ -214,8 +292,17 @@ Devvit.addTrigger({
         await removePostWithReason(postId, invalidFormatMessage, context as Context)
         return;
       }
-      // notify the user about image generation is beign started.
-      await sendMessage(authorUserInfo!.username, "ScintAI - Generating Image", "Your image is being processed. Please be patient, it may take some time. Thank you.", context as Context)
+      // Processing notice goes on the post itself, not via DM: bot DMs
+      // are blocked for users who never interacted with the app. Best
+      // effort — a failed notice must never block the generation.
+      try {
+        await context.reddit.submitComment({
+          id: postId,
+          text: "⏳ ScintAI is generating your image. Please be patient, it may take a few minutes. Thank you.",
+        });
+      } catch (commentError) {
+        console.warn("Processing comment skipped -", commentError);
+      }
       // Rate Limiting Logic
       if (authorId) {
         const date = new Date().toISOString().split('T')[0];
@@ -236,22 +323,39 @@ Devvit.addTrigger({
 
       const promptForImage = extractPromptFromPostBody
 
-      const moderation = await checkModeration(promptForImage, OPENAI_API_KEY)
-      if (moderation.flagged) {
-        // No mercy; del the post
-        await removePostWithReason(postId, "NSFW content is not allowed", context as Context)
+      let moderation;
+      try {
+        moderation = await checkModeration(promptForImage, OPENAI_API_KEY)
+      } catch (modError) {
+        console.error("Moderation threw -", modError);
+        await removePostWithReason(postId, "Content moderation is temporarily unavailable - please try again.", context as Context)
         return;
       }
+      if (moderation.flagged) {
+        if (moderation.categories.includes("Moderation Check Failed")) {
+          // Fail-closed: OpenAI API itself errored (see utils.ts), the
+          // prompt was NOT judged — log it as an outage, not a violation.
+          console.error("Moderation service unavailable, fail-closed removal -", postId);
+          await removePostWithReason(postId, "Content moderation is temporarily unavailable - please try again.", context as Context)
+        } else {
+          // No mercy; del the post
+          console.log("Moderation blocked -", postId, moderation.categories);
+          await removePostWithReason(postId, "Content referencing minors is not allowed", context as Context)
+        }
+        return;
+      }
+      console.log("Moderation passed -", postId);
 
 
       await context.scheduler.runJob({
-        name: "GENERATE_IMAGE_JOB",
+        name: "ENQUEUE_IMAGE_JOB",
         data: {
           postId: postId,
           userId: author?.id!,
           username: authorUserInfo!.username,
           prompt: promptForImage,
-          aspectRatio: aspectRatio
+          aspectRatio: aspectRatio,
+          attempt: 0,
         },
         runAt: new Date()
       })
