@@ -1,0 +1,11 @@
+packages:
+  - worker
+  - scintai-reddit-mod
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+  - protobufjs
+allowBuilds:
+  esbuild: true
+  workerd: true
+  protobufjs: true

@@ -1,0 +1,44 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "middleman",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-08",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    // Base URL of deployed lite.py fastapi_app, e.g. "https://xxx.modal.run"
+    "LITE_URL": "https://your-modal-app.modal.run"
+    // Secrets (never put in vars): wrangler secret put HF_TOKEN
+    // Optional inbound auth: wrangler secret put MIDDLEMAN_KEY
+  },
+    "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "c82fd0723cbc409e9717dbe9b50d5fe8",
+      
+      // Optional: preview_id used when running `wrangler dev` for local dev
+      "preview_id": "c82fd89045cbc409e9717dbe9b50d5fe8"
+    }
+  ],
+  // "r2_buckets": [
+  //   {
+  //     "binding": "MY_BUCKET",
+  //     "bucket_name": "my-bucket"
+  //   }
+  // ],
+  // "d1_databases": [
+  //   {
+  //     "binding": "MY_DB",
+  //     "database_name": "my-database",
+  //     "database_id": ""
+  //   }
+  // ],
+  // "ai": {
+  //   "binding": "AI"
+  // },
+  // "observability": {
+  //   "enabled": true,
+  //   "head_sampling_rate": 1
+  // }
+}

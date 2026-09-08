@@ -1,0 +1,7 @@
+{
+  "name": "scintai",
+  "blocks": {
+    "entry": "src/main.ts",
+    "triggers": ["onPostCreate"]
+  }
+}

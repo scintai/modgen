@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "name": "scintai-mono",
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev:worker": "pnpm --dir worker dev",
+    "deploy:worker": "pnpm --dir worker deploy",
+    "typecheck:worker": "pnpm --dir worker typecheck",
+    "cf-typegen": "pnpm --dir worker cf-typegen",
+    "dev:reddit": "pnpm --dir scintai-reddit-mod dev",
+    "upload:reddit": "pnpm --dir scintai-reddit-mod deploy",
+    "typecheck:reddit": "pnpm --dir scintai-reddit-mod type-check",
+    "typecheck": "pnpm typecheck:worker && pnpm typecheck:reddit"
+  }
+}
