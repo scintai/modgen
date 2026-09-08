@@ -1,5 +1,5 @@
 {
-  "name": "middleman",
+  "name": "modgen",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

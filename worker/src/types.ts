@@ -20,7 +20,7 @@ export interface CloudflareBindings {
   MIDDLEMAN_KEY?: string;
 }
 
-// ---- Client (reddit-bot) -> middleman ----
+// ---- Client (reddit-bot) -> modgen ----
 
 export interface EnqueueBody {
   prompt?: unknown;
@@ -29,7 +29,7 @@ export interface EnqueueBody {
   uid?: unknown;
 }
 
-// ---- Middleman KV record (key = `offload:{uid}`) ----
+// ---- Modgen KV record (key = `offload:{uid}`) ----
 
 export type JobStatus =
   | "queued"
@@ -58,7 +58,7 @@ export interface JobRecord {
   startedAt?: string | null;
 }
 
-// ---- Middleman -> Modal (lite.py) ----
+// ---- Modgen -> Modal (lite.py) ----
 
 export interface ModalAsyncPayload {
   offload_id: number;
@@ -87,7 +87,7 @@ export type ModalResult =
     }
   | { status: "error"; error?: string | null; error_code?: string | null };
 
-// ---- Middleman -> client responses ----
+// ---- Modgen -> client responses ----
 
 export interface EnqueueResponse {
   uid: string;

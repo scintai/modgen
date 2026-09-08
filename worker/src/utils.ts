@@ -200,7 +200,7 @@ export async function postModalClear(
       ids,
     });
   } catch (err) {
-    console.error("[middleman] modal clear failed:", err);
+    console.error("[modgen] modal clear failed:", err);
   }
 }
 

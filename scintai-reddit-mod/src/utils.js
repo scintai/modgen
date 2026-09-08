@@ -108,7 +108,7 @@ export async function enqueueOffload(baseUrl, apiKey, prompt, aspectRatio, uid) 
     }
     return await response.json();
 }
-// Lazy poll: middleman returns the cached terminal result, otherwise
+// Lazy poll: modgen returns the cached terminal result, otherwise
 // live-proxies the GPU worker. queued/started/pending = not ready yet.
 export async function getOffloadStatus(baseUrl, apiKey, uid) {
     const url = `${stripTrailingSlash(baseUrl)}/api/offload/scintai/${encodeURIComponent(uid)}`;

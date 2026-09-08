@@ -1,7 +1,7 @@
 import { Devvit, type Context, RichTextBuilder } from "@devvit/public-api";
 
 import { checkModeration, extractAspectRatio, extractPrompt, enqueueOffload, getOffloadStatus, removePostWithReason } from "./utils.js";
-import { TRIGGER_WORD_FOR_GENERATION } from "./contants.js";
+import { TRIGGER_WORD_FOR_GENERATION, MODGEN_URL } from "./contants.js";
 import { type AspectRatio } from "./type.js";
 
 
@@ -25,22 +25,15 @@ Devvit.addSettings([
     helpText: 'Your OpenAI API key will be used for content moderation.'
   },
   {
-    name: 'MIDDLEMAN_URL',
-    label: 'Middleman API URL',
+    name: 'MODGEN_KEY',
+    label: 'Modgen API Key',
     type: 'string',
     scope: 'installation',
-    helpText: 'Base URL of the middleman worker, e.g. https://modgen.scintai.com'
-  },
-  {
-    name: 'MIDDLEMAN_KEY',
-    label: 'Middleman API Key',
-    type: 'string',
-    scope: 'installation',
-    helpText: 'Must match the MIDDLEMAN_KEY secret on the middleman worker.'
+    helpText: 'Must match the API key secret set on the modgen worker.'
   },
   {
     name: "RATE_LIMIT",
-    label: "Rate Limite Per User",
+    label: "Rate Limit Per User",
     type: 'number',
     scope: 'installation',
     helpText: "A rate limit applies to the total number of generations per user per day."
@@ -69,7 +62,7 @@ const ENQUEUE_RETRY_DELAY_MS = 30 * 1000;
 const ENQUEUE_MAX_ATTEMPTS = 3;
 
 // Job 1: fire-and-forget enqueue, then hand off to the poll loop.
-// uid = postId, so retries are idempotent (middleman dedupes by uid).
+// uid = postId, so retries are idempotent (modgen dedupes by uid).
 Devvit.addSchedulerJob({
   name: 'ENQUEUE_IMAGE_JOB',
   onRun: async (event, context) => {
@@ -80,16 +73,15 @@ Devvit.addSchedulerJob({
     const aspectRatio = event.data!.aspectRatio as AspectRatio;
     const attempt = (event.data!.attempt as number | undefined) ?? 0;
 
-    const MIDDLEMAN_URL = await context.settings.get('MIDDLEMAN_URL') as string | undefined;
-    const MIDDLEMAN_KEY = await context.settings.get('MIDDLEMAN_KEY') as string | undefined;
+    const MODGEN_KEY = await context.settings.get('MODGEN_KEY') as string | undefined;
 
-    if (!MIDDLEMAN_URL || !MIDDLEMAN_KEY) {
+    if (!MODGEN_KEY) {
       await removePostWithReason(postId, "Image generation is not configured.", context as Context)
       return;
     }
 
     try {
-      await enqueueOffload(MIDDLEMAN_URL, MIDDLEMAN_KEY, prompt, aspectRatio, postId);
+      await enqueueOffload(MODGEN_URL, MODGEN_KEY, prompt, aspectRatio, postId);
 
       await context.scheduler.runJob({
         name: "POLL_IMAGE_JOB",
@@ -125,7 +117,7 @@ Devvit.addSchedulerJob({
   },
 });
 
-// Job 2: poll middleman until terminal, then publish. Reschedules itself
+// Job 2: poll modgen until terminal, then publish. Reschedules itself
 // while the job is queued/started/pending on the GPU worker.
 Devvit.addSchedulerJob({
   name: 'POLL_IMAGE_JOB',
@@ -135,15 +127,14 @@ Devvit.addSchedulerJob({
     const username = event.data!.username as string;
     const attempt = (event.data!.attempt as number | undefined) ?? 0;
 
-    const MIDDLEMAN_URL = await context.settings.get('MIDDLEMAN_URL') as string | undefined;
-    const MIDDLEMAN_KEY = await context.settings.get('MIDDLEMAN_KEY') as string | undefined;
+    const MODGEN_KEY = await context.settings.get('MODGEN_KEY') as string | undefined;
     const AFTER_GENERATION_MESSAGE = await context.settings.get("AFTER_GENERATION_MESSAGE") || "View More AI Arts"
     const LINK_AFTER_GENERATION_MESSAGE = await context.settings.get("LINK_AFTER_GENERATION_MESSAGE") || "https://www.reddit.com/r/scintai/"
 
     const date = new Date().toISOString().split('T')[0];
     const redisKey = `daily_credits:${userId}:${date}`;
 
-    if (!MIDDLEMAN_URL || !MIDDLEMAN_KEY) {
+    if (!MODGEN_KEY) {
       await removePostWithReason(postId, "Image generation is not configured.", context as Context)
       return;
     }
@@ -163,7 +154,7 @@ Devvit.addSchedulerJob({
 
     let result;
     try {
-      result = await getOffloadStatus(MIDDLEMAN_URL, MIDDLEMAN_KEY, postId);
+      result = await getOffloadStatus(MODGEN_URL, MODGEN_KEY, postId);
     }
     catch (error) {
       console.error("Poll failed -", error);
@@ -194,7 +185,7 @@ Devvit.addSchedulerJob({
     }
 
     try {
-      // Publish: same path as before, base64 now comes from middleman.
+      // Publish: same path as before, base64 now comes from modgen.
       const mimeType = result.image_format === "png" ? "image/png" : "image/webp";
       const imageUrl = `data:${mimeType};base64,${result.image_b64}`;
 
@@ -203,9 +194,12 @@ Devvit.addSchedulerJob({
           url: imageUrl,
           type: 'image',
         });
-        const rich = new RichTextBuilder()
-          .image({ mediaId: mediaUpload.mediaId })
-          .paragraph((p) => {
+          const rich = new RichTextBuilder()
+            .paragraph((p) => {
+              p.text({ text: "🔞 AI-generated adult content — viewer discretion advised." });
+            })
+            .image({ mediaId: mediaUpload.mediaId })
+            .paragraph((p) => {
             p.link({
               text: AFTER_GENERATION_MESSAGE! as string,
               url: LINK_AFTER_GENERATION_MESSAGE! as string
@@ -218,10 +212,9 @@ Devvit.addSchedulerJob({
           });
           await comment.distinguish(true)
 
-          const userHistoryKey = `user_history:${userId}`;
-        await context.redis.zAdd(userHistoryKey, { member: mediaUpload.mediaUrl, score: Date.now() });
-        await context.redis.incrBy(redisKey, 1);
-        return;
+          await context.redis.incrBy(redisKey, 1);
+          await context.redis.expire(redisKey, 2 * 24 * 60 * 60); // day bucket + slack
+          return;
 
       } catch (uploadError) {
         console.error("Media upload failed -", uploadError);
@@ -247,7 +240,6 @@ Devvit.addTrigger({
     const postBody = post?.selftext
     const isImage = post?.isImage //
     const isVideo = post?.isVideo
-    const isNSFW = post?.nsfw // in both the cases delte the post with coment: "not supported"
     const postdetail = await context.reddit.getPostById(postId!);
 
     const authorId = author?.id
@@ -292,17 +284,6 @@ Devvit.addTrigger({
         await removePostWithReason(postId, invalidFormatMessage, context as Context)
         return;
       }
-      // Processing notice goes on the post itself, not via DM: bot DMs
-      // are blocked for users who never interacted with the app. Best
-      // effort — a failed notice must never block the generation.
-      try {
-        await context.reddit.submitComment({
-          id: postId,
-          text: "⏳ ScintAI is generating your image. Please be patient, it may take a few minutes. Thank you.",
-        });
-      } catch (commentError) {
-        console.warn("Processing comment skipped -", commentError);
-      }
       // Rate Limiting Logic
       if (authorId) {
         const date = new Date().toISOString().split('T')[0];
@@ -346,6 +327,18 @@ Devvit.addTrigger({
       }
       console.log("Moderation passed -", postId);
 
+      // Processing notice goes on the post itself, not via DM: bot DMs
+      // are blocked for users who never interacted with the app. Best
+      // effort — a failed notice must never block the generation. Posted
+      // only after all checks pass, so rejected posts never see it.
+      try {
+        await context.reddit.submitComment({
+          id: postId,
+          text: "⏳ ScintAI is generating your image. Please be patient, it may take a few minutes. Thank you.",
+        });
+      } catch (commentError) {
+        console.warn("Processing comment skipped -", commentError);
+      }
 
       await context.scheduler.runJob({
         name: "ENQUEUE_IMAGE_JOB",
@@ -368,3 +361,43 @@ Devvit.addTrigger({
 
 
 export default Devvit;
+
+// Deletion compliance: when a post/comment disappears from Reddit, drop
+// the backend job record (the worker also clears the GPU entry). Redis
+// holds only anonymous daily counters (no content), which expire alone.
+async function purgePostData(postId: string, context: Context) {
+  try {
+    const key = await context.settings.get('MODGEN_KEY') as string | undefined;
+    if (key) {
+      await fetch(`${MODGEN_URL}/api/offload/scintai/${encodeURIComponent(postId)}`, {
+        method: "DELETE",
+        headers: { "X-Api-Key": key },
+      });
+    }
+  } catch (err) {
+    console.warn("Backend purge skipped -", err);
+  }
+}
+
+Devvit.addTrigger({
+  event: 'PostDelete',
+  onEvent: async (event, context) => {
+    const data = event as unknown as { postId?: string; post?: { id?: string } };
+    const postId = data.postId ?? data.post?.id;
+    if (!postId) return;
+    await purgePostData(postId, context as Context);
+  },
+});
+
+Devvit.addTrigger({
+  event: 'CommentDelete',
+  onEvent: async (event, context) => {
+    const data = event as unknown as {
+      postId?: string;
+      comment?: { postId?: string };
+    };
+    const postId = data.postId ?? data.comment?.postId;
+    if (!postId) return;
+    await purgePostData(postId, context as Context);
+  },
+});

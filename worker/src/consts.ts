@@ -1,4 +1,4 @@
-// Central constants for the middleman worker.
+// Central constants for the modgen worker.
 // Sources:
 // - aspect map + negative prompt copied from scint/src/lib/scint-lite.ts
 // - Modal bucket list copied from modal-deployment/stableyogi/lite.py ASPECT_RATIOS

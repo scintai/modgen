@@ -164,7 +164,7 @@ export async function enqueueOffload(
     return await response.json() as EnqueueResult;
 }
 
-// Lazy poll: middleman returns the cached terminal result, otherwise
+// Lazy poll: modgen returns the cached terminal result, otherwise
 // live-proxies the GPU worker. queued/started/pending = not ready yet.
 export async function getOffloadStatus(
     baseUrl: string,
