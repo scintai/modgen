@@ -31,9 +31,9 @@ app.use("/api/*", async (c, next) => {
 });
 
 function requireConfig(env: CloudflareBindings): string {
-  if (!env.LITE_URL) throw new Error("LITE_URL is not configured");
+  if (!env.MODAL_LITE_URL) throw new Error("MODAL_LITE_URL is not configured");
   if (!env.HF_TOKEN) throw new Error("HF_TOKEN is not configured");
-  return env.LITE_URL;
+  return env.MODAL_LITE_URL;
 }
 
 app.get("/", (c) => {
@@ -225,9 +225,9 @@ app.delete("/api/offload/scintai/:uid", async (c) => {
   const uid = c.req.param("uid");
   const record = await kvGet(c.env.KV, uid).catch(() => null);
   await c.env.KV.delete(kvKey(uid)).catch(() => null);
-  if (record && c.env.LITE_URL && c.env.HF_TOKEN) {
+  if (record && c.env.MODAL_LITE_URL && c.env.HF_TOKEN) {
     c.executionCtx.waitUntil(
-      postModalClear(c.env.LITE_URL, c.env.HF_TOKEN, [record.modalId]),
+      postModalClear(c.env.MODAL_LITE_URL, c.env.HF_TOKEN, [record.modalId]),
     );
   }
   return c.json({ deleted: Boolean(record), uid });

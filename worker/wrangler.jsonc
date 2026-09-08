@@ -8,7 +8,7 @@
   ],
   "vars": {
     // Base URL of deployed lite.py fastapi_app, e.g. "https://xxx.modal.run"
-    "LITE_URL": "https://your-modal-app.modal.run"
+    "MODAL_LITE_URL": "https://your-modal-app.modal.run"
     // Secrets (never put in vars): wrangler secret put HF_TOKEN
     // Optional inbound auth: wrangler secret put MIDDLEMAN_KEY
   },

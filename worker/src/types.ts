@@ -13,7 +13,7 @@ export interface KVStore {
 export interface CloudflareBindings {
   KV: KVStore;
   /** Base URL of deployed lite.py fastapi_app, e.g. https://xxx.modal.run */
-  LITE_URL: string;
+  MODAL_LITE_URL: string;
   /** Outbound key: sent as X-Api-Key to Modal (== HF_TOKEN server-side). */
   HF_TOKEN: string;
   /** Optional inbound key: if set, bot must send X-Api-Key == this. */

@@ -7,7 +7,7 @@ folder, so they never interfere with each other.
 .
 ├── worker/               # Cloudflare Worker (Hono) — image-job queue
 │   ├── src/              # routes in index.ts, types.ts, utils.ts, consts.ts
-│   ├── wrangler.jsonc    # Worker config (name, KV, LITE_URL)
+│   ├── wrangler.jsonc    # Worker config (name, KV, MODAL_LITE_URL)
 │   └── .env.example      # copy to .dev.vars for local dev
 └── scintai-reddit-mod/   # Devvit app (Reddit bot) — queue client
     ├── src/main.ts       # PostCreate trigger + scheduler jobs
