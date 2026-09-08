@@ -1,5 +1,7 @@
 # 🎨 ScintAI — AI Image and GIF Generation for Subreddits, at Scale and Dirt Cheap, So You Can Serve Your Subreddit Without Breaking the Bank
 
+> Open source — the whole project (bot, backend, docs): https://github.com/scintai/modgen
+
 Big corporations keep taking away our freedom to be creative, piling on restrictions, when Reddit is supposed to be the one place where artistic freedom should never get suppressed. As someone who's hardcore about what Reddit stands for, I felt it was on me to build something that lets Reddit users generate AI images and GIFs with full artistic expression, no limits attached.
 
 Turn your text prompts into stunning AI generated art, right from a Reddit post. ScintAI is a Devvit app that brings custom GPU image (and soon GIF) generation directly into your subreddit

@@ -1,4 +1,4 @@
-# scintai-mono
+# ScintAI ModGen Backend API
 
 pnpm workspace with two independent apps. Each tool runs inside its own
 folder, so they never interfere with each other.
